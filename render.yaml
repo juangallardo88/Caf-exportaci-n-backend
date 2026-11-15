@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: cafe-exportacion-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app --workers 2 --timeout 60
+    healthCheckPath: /api/salud
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: ENTORNO
+        value: produccion
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false   # cadena de conexión de Neon, se pega en el panel de Render
+      - key: CORS_ORIGINS
+        sync: false   # dominio del frontend en Vercel, p. ej. https://cafe-exportacion.vercel.app

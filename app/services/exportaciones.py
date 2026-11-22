@@ -25,6 +25,32 @@ def _exigir(exportacion_id: int) -> dict:
     return exp
 
 
+MODOS = {"MARITIMO": "Marítimo", "AEREO": "Aéreo", "TERRESTRE": "Terrestre", "MULTIMODAL": "Multimodal"}
+
+
+def _usd(valor: float) -> str:
+    """US$ 3.100,00 (formato colombiano)."""
+    return "US$ " + f"{valor:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def _fecha(valor) -> str:
+    return dt.date.fromisoformat(str(valor)[:10]).strftime("%d/%m/%Y")
+
+
+def _sacos(n: int) -> str:
+    return f"{n} saco" if n == 1 else f"{n} sacos"
+
+
+def _evento(exportacion_id: int, tipo: str, descripcion: str, estado: str | None = None):
+    """Deja constancia en el historial; se guarda en la misma transacción que el cambio."""
+    ExportacionRepositorio().registrar_evento(exportacion_id, tipo, descripcion, g.usuario["id"], estado)
+
+
+def historial(exportacion_id: int) -> list[dict]:
+    _exigir(exportacion_id)
+    return ExportacionRepositorio().eventos(exportacion_id)
+
+
 def _exigir_borrador(exp: dict):
     if exp["estado"] != "BORRADOR":
         raise ReglaNegocio("Solo se pueden modificar los productos de una exportación en borrador")
@@ -54,7 +80,11 @@ def crear(datos) -> dict:
     d = datos.model_dump()
     d["consecutivo"] = siguiente_consecutivo(repo.ultimo_consecutivo(anio), anio)
     d["creado_por"] = g.usuario["id"]
-    return detalle(repo.crear(d))
+    nueva = repo.crear(d)
+    exp = repo.por_id(nueva)
+    _evento(nueva, "CREADA", f"Creó la exportación {exp['consecutivo']} para {exp['cliente']} hacia "
+            f"{exp['pais_destino']} ({exp['incoterm']}, salida por {exp['puerto_salida']})", "BORRADOR")
+    return detalle(nueva)
 
 
 def actualizar_costos(exportacion_id: int, datos) -> dict:
@@ -62,6 +92,7 @@ def actualizar_costos(exportacion_id: int, datos) -> dict:
     if exp["estado"] in ESTADOS_CERRADOS:
         raise ReglaNegocio("No se pueden cambiar los costos de una exportación cerrada")
     ExportacionRepositorio().actualizar(exportacion_id, datos.model_dump())
+    _evento(exportacion_id, "COSTOS", f"Actualizó los costos: impuestos {_usd(datos.impuestos)} · flete {_usd(datos.flete)}")
     return detalle(exportacion_id)
 
 
@@ -81,16 +112,22 @@ def agregar_producto(exportacion_id: int, datos) -> dict:
         )
     if existente:
         repo.actualizar_detalle(existente["id"], cantidad_total, producto["precio"])
+        texto = f"Sumó {_sacos(datos.cantidad)} de {producto['nombre']} (ahora {_sacos(cantidad_total)})"
     else:
         repo.agregar_detalle(exportacion_id, datos.producto_id, datos.cantidad, producto["precio"])
+        texto = f"Agregó {_sacos(datos.cantidad)} de {producto['nombre']} a {_usd(producto['precio'])} c/u"
+    _evento(exportacion_id, "PRODUCTOS", texto)
     return detalle(exportacion_id)
 
 
 def quitar_producto(exportacion_id: int, detalle_id: int) -> dict:
+    repo = ExportacionRepositorio()
     exp = _exigir(exportacion_id)
     _exigir_borrador(exp)
-    if not ExportacionRepositorio().quitar_detalle(exportacion_id, detalle_id):
+    linea = next((d for d in repo.detalles(exportacion_id) if d["id"] == detalle_id), None)
+    if not linea or not repo.quitar_detalle(exportacion_id, detalle_id):
         raise NoEncontrado("El producto no está en esta exportación")
+    _evento(exportacion_id, "PRODUCTOS", f"Quitó {linea['producto']} ({_sacos(linea['cantidad'])})")
     return detalle(exportacion_id)
 
 
@@ -124,6 +161,15 @@ def cambiar_estado(exportacion_id: int, nuevo: str) -> dict:
                                        f"Cancelación de {exp['consecutivo']}")
 
     repo.actualizar(exportacion_id, {"estado": nuevo})
+    sacos = sum(linea["cantidad"] for linea in exp["productos"])
+    texto = {
+        "CONFIRMADA": f"Confirmó la exportación: se descontaron {_sacos(sacos)} del inventario",
+        "EN_TRANSITO": f"Marcó la carga en tránsito desde {exp['puerto_salida']}",
+        "ENTREGADA": f"Marcó la exportación como entregada a {exp['cliente']}",
+        "CANCELADA": "Canceló la exportación"
+                     + (f": se devolvieron {_sacos(sacos)} al inventario" if actual == "CONFIRMADA" else ""),
+    }[nuevo]
+    _evento(exportacion_id, "ESTADO", texto, nuevo)
     return detalle(exportacion_id)
 
 
@@ -136,6 +182,8 @@ def registrar_fechas(exportacion_id: int, datos) -> dict:
         "fecha_embarque": datos.fecha_embarque.isoformat(),
         "fecha_estimada_llegada": datos.fecha_estimada_llegada.isoformat(),
     })
+    _evento(exportacion_id, "FECHAS", f"Registró las fechas: embarque {_fecha(datos.fecha_embarque)} · "
+            f"llegada estimada {_fecha(datos.fecha_estimada_llegada)}")
     return detalle(exportacion_id)
 
 
@@ -143,5 +191,10 @@ def registrar_transporte(exportacion_id: int, datos) -> dict:
     exp = _exigir(exportacion_id)
     if exp["estado"] in ESTADOS_CERRADOS:
         raise ReglaNegocio("No se puede cambiar el transporte de una exportación cerrada")
-    ExportacionRepositorio().guardar_transporte(exportacion_id, datos.model_dump())
+    repo = ExportacionRepositorio()
+    habia = repo.transporte(exportacion_id)
+    repo.guardar_transporte(exportacion_id, datos.model_dump())
+    contenedor = f" · contenedor {datos.numero_contenedor}" if datos.numero_contenedor else ""
+    _evento(exportacion_id, "TRANSPORTE", f"{'Actualizó' if habia else 'Registró'} el transporte: "
+            f"{MODOS.get(datos.tipo, datos.tipo)} · {datos.empresa} · guía {datos.numero_guia}{contenedor}")
     return detalle(exportacion_id)

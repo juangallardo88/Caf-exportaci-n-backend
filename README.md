@@ -15,7 +15,7 @@ app/
 ├── database.py        Conexión única para PostgreSQL y SQLite (consultas parametrizadas)
 ├── errors.py          Errores de negocio y respuestas de error centralizadas
 ├── security.py        Contraseñas cifradas, JWT y decorador de permisos por rol
-├── domain/reglas.py   Reglas de negocio puras (estados, stock, totales, consecutivos)
+├── domain/reglas.py   Reglas de negocio puras (estados, stock, totales, consecutivos, proyección de agotamiento)
 ├── schemas/           DTO de entrada validados con Pydantic
 ├── repositories/      Acceso a datos (única capa con SQL)
 ├── services/          Lógica de negocio por módulo
@@ -58,8 +58,8 @@ python -m pytest -v
 
 | Tipo | Carpeta | Qué comprueba |
 |---|---|---|
-| Unitarias | `tests/unit` | Estados de exportación, cálculo de totales, consecutivos, movimientos de stock, validación de datos, contraseñas y tokens |
-| Integración | `tests/integration` | Cada historia a través de la API: permisos por rol, registro y búsqueda, reglas de stock, máquina de estados, reportes CSV, CORS y manejo de errores |
+| Unitarias | `tests/unit` | Estados de exportación, cálculo de totales, consecutivos, movimientos de stock, proyección de agotamiento, validación de datos, contraseñas y tokens |
+| Integración | `tests/integration` | Cada historia a través de la API: permisos por rol, registro y búsqueda, reglas de stock, máquina de estados, historial de exportaciones, proyección de inventario, reportes CSV, CORS y manejo de errores |
 
 **GitHub Actions** (`.github/workflows/pruebas.yml`) las ejecuta en cada push:
 1. Todas las pruebas sobre SQLite. Genera `reporte-pruebas.xml`, que se descarga desde la ejecución.

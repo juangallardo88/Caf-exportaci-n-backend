@@ -151,3 +151,72 @@ def test_registrar_transporte_sin_empresa(client, admin, exportacion):  # HU-23
     r = client.put(f"/api/exportaciones/{exportacion['id']}/transporte",
                    json={**TRANSPORTE, "empresa": ""}, headers=admin)
     assert r.status_code == 422
+
+
+# --- Historial de la exportación ---------------------------------------------------
+
+def test_historial_registra_cada_paso_con_su_usuario(client, admin, operador, base, exportacion):
+    eid = exportacion["id"]
+    client.post(f"/api/exportaciones/{eid}/productos", json={"producto_id": base["cafe"]["id"], "cantidad": 10},
+                headers=operador)
+    client.post(f"/api/exportaciones/{eid}/productos", json={"producto_id": base["cafe"]["id"], "cantidad": 5},
+                headers=operador)
+    client.put(f"/api/exportaciones/{eid}/costos", json={"impuestos": 500, "flete": 1200.5}, headers=operador)
+    client.put(f"/api/exportaciones/{eid}/fechas",
+               json={"fecha_embarque": "2026-12-01", "fecha_estimada_llegada": "2026-12-28"}, headers=operador)
+    client.put(f"/api/exportaciones/{eid}/transporte", json=TRANSPORTE, headers=operador)
+    client.patch(f"/api/exportaciones/{eid}/estado", json={"estado": "CONFIRMADA"}, headers=admin)
+    client.patch(f"/api/exportaciones/{eid}/estado", json={"estado": "EN_TRANSITO"}, headers=operador)
+
+    eventos = client.get(f"/api/exportaciones/{eid}/historial", headers=admin).json
+    assert [e["tipo"] for e in eventos] == ["CREADA", "PRODUCTOS", "PRODUCTOS", "COSTOS", "FECHAS", "TRANSPORTE",
+                                            "ESTADO", "ESTADO"]
+    textos = [e["descripcion"] for e in eventos]
+    assert textos[0].startswith(f"Creó la exportación {exportacion['consecutivo']}")
+    assert textos[1] == "Agregó 10 sacos de Café Excelso Supremo a US$ 280,00 c/u"
+    assert textos[2] == "Sumó 5 sacos de Café Excelso Supremo (ahora 15 sacos)"
+    assert textos[3] == "Actualizó los costos: impuestos US$ 500,00 · flete US$ 1.200,50"
+    assert textos[4] == "Registró las fechas: embarque 01/12/2026 · llegada estimada 28/12/2026"
+    assert textos[5] == "Registró el transporte: Marítimo · Maersk · guía MAEU-CTG-221907 · contenedor MSKU 778120-5"
+    assert textos[6] == "Confirmó la exportación: se descontaron 15 sacos del inventario"
+    assert [e["estado"] for e in eventos if e["tipo"] == "ESTADO"] == ["CONFIRMADA", "EN_TRANSITO"]
+    assert eventos[0]["usuario"] == "Usuario Administrador"  # la creó el admin (fixture)
+    assert eventos[1]["usuario"] == "Usuario Operador" and eventos[6]["usuario"] == "Usuario Administrador"
+    assert all(e["fecha"] for e in eventos)
+
+
+def test_historial_registra_quitar_producto_y_cancelacion_con_devolucion(client, admin, base, exportacion):
+    eid = exportacion["id"]
+    detalle = client.post(f"/api/exportaciones/{eid}/productos",
+                          json={"producto_id": base["cafe"]["id"], "cantidad": 4}, headers=admin).json
+    client.post(f"/api/exportaciones/{eid}/productos", json={"producto_id": base["cacao"]["id"], "cantidad": 2},
+                headers=admin)
+    linea_cacao = next(p for p in client.get(f"/api/exportaciones/{eid}", headers=admin).json["productos"]
+                       if p["sku"] == "CAC-FIN-60")
+    client.delete(f"/api/exportaciones/{eid}/productos/{linea_cacao['id']}", headers=admin)
+    client.patch(f"/api/exportaciones/{eid}/estado", json={"estado": "CONFIRMADA"}, headers=admin)
+    client.patch(f"/api/exportaciones/{eid}/estado", json={"estado": "CANCELADA"}, headers=admin)
+    textos = [e["descripcion"] for e in client.get(f"/api/exportaciones/{eid}/historial", headers=admin).json]
+    assert "Quitó Cacao Fino de Aroma (2 sacos)" in textos
+    assert textos[-1] == "Canceló la exportación: se devolvieron 4 sacos al inventario"
+    assert detalle["total"] > 0
+
+
+def test_un_cambio_rechazado_no_deja_rastro_en_el_historial(client, admin, base, exportacion):
+    eid = exportacion["id"]
+    r = client.patch(f"/api/exportaciones/{eid}/estado", json={"estado": "CONFIRMADA"}, headers=admin)
+    assert r.status_code == 422  # sin productos no se puede confirmar
+    assert [e["tipo"] for e in client.get(f"/api/exportaciones/{eid}/historial", headers=admin).json] == ["CREADA"]
+
+
+def test_el_auditor_consulta_el_historial(client, auditor, exportacion):
+    r = client.get(f"/api/exportaciones/{exportacion['id']}/historial", headers=auditor)
+    assert r.status_code == 200 and len(r.json) == 1
+
+
+def test_historial_de_exportacion_inexistente(client, admin):
+    assert client.get("/api/exportaciones/999/historial", headers=admin).status_code == 404
+
+
+def test_historial_requiere_sesion(client, exportacion):
+    assert client.get(f"/api/exportaciones/{exportacion['id']}/historial").status_code == 401

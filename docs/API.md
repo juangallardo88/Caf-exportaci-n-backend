@@ -74,6 +74,7 @@ Todas las respuestas de error tienen la misma forma:
 | GET | `/exportaciones?estado=&desde=&hasta=&cliente_id=&q=` | Consultar y filtrar (fechas AAAA-MM-DD) |
 | POST | `/exportaciones` | `{cliente_id, pais_destino_id, puerto_salida, incoterm}` → consecutivo `EXP-AAAA-NNNN` |
 | GET | `/exportaciones/{id}` | Detalle con productos, transporte, totales y estados siguientes |
+| GET | `/exportaciones/{id}/historial` | Línea de tiempo: `[{tipo, estado, descripcion, usuario, rol, fecha}]` (fecha en UTC) |
 | PUT | `/exportaciones/{id}/costos` | `{impuestos, flete}` |
 | POST | `/exportaciones/{id}/productos` | `{producto_id, cantidad}`; valida stock; solo en borrador |
 | DELETE | `/exportaciones/{id}/productos/{detalle_id}` | Quitar producto (borrador) |
@@ -85,6 +86,7 @@ Máquina de estados: `BORRADOR → CONFIRMADA → EN_TRANSITO → ENTREGADA`, y 
 - Confirmar exige al menos un producto y descuenta el inventario (movimientos de SALIDA).
 - Pasar a tránsito exige el transporte registrado.
 - Cancelar una exportación confirmada devuelve el inventario (movimientos de ENTRADA).
+- Cada cambio (creación, productos, costos, fechas, transporte y estado) queda en el historial con el usuario y la hora, en la misma transacción: si el cambio se rechaza, no deja rastro.
 
 ### Inventario · HU-24 a HU-26
 | Método | Ruta | Descripción |
@@ -93,6 +95,7 @@ Máquina de estados: `BORRADOR → CONFIRMADA → EN_TRANSITO → ENTREGADA`, y 
 | GET | `/inventario/bajo-stock` | Productos con cantidad ≤ stock mínimo |
 | GET / PUT | `/inventario/{producto_id}` | Consultar / cambiar `{ubicacion, stock_minimo}` |
 | GET | `/inventario/movimientos?producto_id=&limite=` | Historial auditado |
+| GET | `/inventario/proyeccion?dias=90` | Proyección de agotamiento por producto (ventana de 30 a 365 días): consumo diario, días y fecha para el mínimo y para agotarse, nivel `AGOTADO/ALTA/MEDIA/BAJA/SIN_CONSUMO` y serie de stock |
 | POST | `/inventario/movimientos` | `{producto_id, tipo: ENTRADA|SALIDA|AJUSTE, cantidad, motivo}` |
 
 ### Analítica · HU-27 a HU-30

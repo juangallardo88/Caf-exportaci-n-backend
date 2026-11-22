@@ -9,6 +9,7 @@
 BEGIN;
 
 DROP TABLE IF EXISTS token_revocado        CASCADE;
+DROP TABLE IF EXISTS evento_exportacion    CASCADE;
 DROP TABLE IF EXISTS movimiento_inventario CASCADE;
 DROP TABLE IF EXISTS transporte            CASCADE;
 DROP TABLE IF EXISTS detalle_exportacion   CASCADE;
@@ -156,6 +157,21 @@ CREATE TABLE transporte (
 );
 
 -- ---------------------------------------------------------------------
+-- EVENTO_EXPORTACION · historial de cada exportación (quién hizo qué y cuándo)
+-- ---------------------------------------------------------------------
+CREATE TABLE evento_exportacion (
+    id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    exportacion_id  INTEGER      NOT NULL REFERENCES exportacion (id) ON DELETE CASCADE,
+    tipo            VARCHAR(20)  NOT NULL
+                    CHECK (tipo IN ('CREADA', 'PRODUCTOS', 'COSTOS', 'FECHAS', 'TRANSPORTE', 'ESTADO')),
+    estado          VARCHAR(20)
+                    CHECK (estado IS NULL OR estado IN ('BORRADOR', 'CONFIRMADA', 'EN_TRANSITO', 'ENTREGADA', 'CANCELADA')),
+    descripcion     VARCHAR(300) NOT NULL,
+    usuario_id      INTEGER      REFERENCES usuario (id),
+    fecha           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ---------------------------------------------------------------------
 -- MOVIMIENTO_INVENTARIO · HU-25 (entradas, salidas y ajustes auditados)
 -- ---------------------------------------------------------------------
 CREATE TABLE movimiento_inventario (
@@ -181,5 +197,6 @@ CREATE INDEX idx_exportacion_cliente   ON exportacion (cliente_id);
 CREATE INDEX idx_exportacion_embarque  ON exportacion (fecha_embarque);
 CREATE INDEX idx_detalle_producto      ON detalle_exportacion (producto_id);
 CREATE INDEX idx_movimiento_producto   ON movimiento_inventario (producto_id, fecha);
+CREATE INDEX idx_evento_exportacion   ON evento_exportacion (exportacion_id, fecha);
 
 COMMIT;

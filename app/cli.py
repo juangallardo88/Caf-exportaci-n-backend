@@ -7,6 +7,8 @@ En producción las tablas y datos se cargan en Neon con schema.sql y seed.sql.
 """
 from __future__ import annotations
 
+import datetime as dt
+
 import click
 from werkzeug.security import generate_password_hash
 
@@ -62,6 +64,62 @@ EXPORTACIONES = [
 ]
 
 
+# Los eventos del historial se guardan en UTC (como CURRENT_TIMESTAMP); Colombia es UTC-5.
+UTC_COLOMBIA = dt.timedelta(hours=5)
+MODOS_DEMO = {"MARITIMO": "Marítimo", "AEREO": "Aéreo", "TERRESTRE": "Terrestre", "MULTIMODAL": "Multimodal"}
+
+
+def _usd(valor: float) -> str:
+    return "US$ " + f"{valor:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def momentos_demo(exportacion) -> dict:
+    """Hora local de cada paso de una exportación de ejemplo."""
+    cons, tax, puerto, inco, estado, imp, flete, emb, lle, creado, lineas, transp = exportacion
+    t0 = dt.datetime.fromisoformat(creado)
+    return {
+        "creada": t0,
+        "confirmada": t0 + dt.timedelta(days=1, hours=2),
+        "en_transito": dt.datetime.fromisoformat(f"{emb} 08:00:00") if emb else None,
+        "entregada": dt.datetime.fromisoformat(f"{lle} 15:00:00") if lle else None,
+        "cancelada": t0 + dt.timedelta(days=3, hours=1),
+    }
+
+
+def eventos_demo(exportacion, cliente: str, pais: str) -> list[tuple]:
+    """Historial coherente con los datos de ejemplo: (fecha UTC, tipo, estado, descripción, correo)."""
+    cons, tax, puerto, inco, estado, imp, flete, emb, lle, creado, lineas, transp = exportacion
+    m, op, adm = momentos_demo(exportacion), "operador@ritech.co", "admin@ritech.co"
+    t0, eventos = m["creada"], []
+    eventos.append((t0, "CREADA", "BORRADOR",
+                    f"Creó la exportación {cons} para {cliente} hacia {pais} ({inco}, salida por {puerto})", op))
+    precios = {p[0]: (p[1], p[4]) for p in PRODUCTOS}
+    for i, (sku, cantidad) in enumerate(lineas, start=1):
+        nombre, precio = precios[sku]
+        eventos.append((t0 + dt.timedelta(minutes=10 * i), "PRODUCTOS", None,
+                        f"Agregó {cantidad} sacos de {nombre} a {_usd(precio)} c/u", op))
+    if estado in ("CONFIRMADA", "EN_TRANSITO", "ENTREGADA"):
+        eventos.append((t0 + dt.timedelta(hours=1), "COSTOS", None,
+                        f"Actualizó los costos: impuestos {_usd(imp)} · flete {_usd(flete)}", op))
+        f_emb, f_lle = (dt.date.fromisoformat(x).strftime("%d/%m/%Y") for x in (emb, lle))
+        eventos.append((t0 + dt.timedelta(hours=1, minutes=5), "FECHAS", None,
+                        f"Registró las fechas: embarque {f_emb} · llegada estimada {f_lle}", op))
+        tipo, empresa, guia, contenedor = transp
+        extra = f" · contenedor {contenedor}" if contenedor else ""
+        eventos.append((t0 + dt.timedelta(days=1), "TRANSPORTE", None,
+                        f"Registró el transporte: {MODOS_DEMO[tipo]} · {empresa} · guía {guia}{extra}", op))
+        sacos = sum(c for _, c in lineas)
+        eventos.append((m["confirmada"], "ESTADO", "CONFIRMADA",
+                        f"Confirmó la exportación: se descontaron {sacos} sacos del inventario", adm))
+    if estado in ("EN_TRANSITO", "ENTREGADA"):
+        eventos.append((m["en_transito"], "ESTADO", "EN_TRANSITO", f"Marcó la carga en tránsito desde {puerto}", op))
+    if estado == "ENTREGADA":
+        eventos.append((m["entregada"], "ESTADO", "ENTREGADA", f"Marcó la exportación como entregada a {cliente}", op))
+    if estado == "CANCELADA":
+        eventos.append((m["cancelada"], "ESTADO", "CANCELADA", "Canceló la exportación", adm))
+    return [(fecha + UTC_COLOMBIA, *resto) for fecha, *resto in eventos]
+
+
 def cargar_datos_demo(db: Conexion, metodo_hash: str = "pbkdf2:sha256"):
     ids = {}
     for nombre, correo, clave, rol in USUARIOS:
@@ -92,7 +150,10 @@ def cargar_datos_demo(db: Conexion, metodo_hash: str = "pbkdf2:sha256"):
         clientes[tax] = (db.insertar(
             "INSERT INTO cliente (tax_id, razon_social, pais_id, ciudad, direccion_entrega, contacto_compras, correo)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)", (tax, razon, paises[iso], ciudad, dire, contacto, correo)), paises[iso])
-    for cons, tax, puerto, inco, estado, imp, flete, emb, lle, creado, lineas, transp in EXPORTACIONES:
+    nombres_cliente = {c[0]: c[1] for c in CLIENTES}
+    nombres_pais = {pid: next(n for n, iso2, *_ in PAISES if iso2 == iso) for iso, pid in paises.items()}
+    for exportacion in EXPORTACIONES:
+        cons, tax, puerto, inco, estado, imp, flete, emb, lle, creado, lineas, transp = exportacion
         cliente_id, pais_id = clientes[tax]
         eid = db.insertar(
             "INSERT INTO exportacion (consecutivo, cliente_id, pais_destino_id, puerto_salida, incoterm, estado,"
@@ -104,11 +165,15 @@ def cargar_datos_demo(db: Conexion, metodo_hash: str = "pbkdf2:sha256"):
             db.insertar("INSERT INTO detalle_exportacion (exportacion_id, producto_id, cantidad, precio_unitario,"
                         " subtotal) VALUES (?, ?, ?, ?, ?)", (eid, pid, cantidad, precio, cantidad * precio))
             if estado in ("CONFIRMADA", "EN_TRANSITO", "ENTREGADA"):
+                confirmada = momentos_demo(exportacion)["confirmada"].isoformat(sep=" ")
                 db.insertar("INSERT INTO movimiento_inventario (producto_id, tipo, cantidad, motivo, fecha, usuario_id)"
-                            " VALUES (?, 'SALIDA', ?, ?, ?, ?)", (pid, cantidad, f"Exportación {cons}", creado, operador))
+                            " VALUES (?, 'SALIDA', ?, ?, ?, ?)", (pid, cantidad, f"Exportación {cons}", confirmada, operador))
         if transp:
             db.insertar("INSERT INTO transporte (exportacion_id, tipo, empresa, numero_guia, numero_contenedor)"
                         " VALUES (?, ?, ?, ?, ?)", (eid, *transp))
+        for fecha, tipo, estado_ev, descripcion, correo in eventos_demo(exportacion, nombres_cliente[tax], nombres_pais[pais_id]):
+            db.insertar("INSERT INTO evento_exportacion (exportacion_id, tipo, estado, descripcion, usuario_id, fecha)"
+                        " VALUES (?, ?, ?, ?, ?, ?)", (eid, tipo, estado_ev, descripcion, ids[correo], fecha.isoformat(sep=" ")))
     db.confirmar()
 
 

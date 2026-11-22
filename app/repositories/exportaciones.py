@@ -107,3 +107,19 @@ class ExportacionRepositorio(Repositorio):
                 " VALUES (?, ?, ?, ?, ?)",
                 (exportacion_id, d["tipo"], d["empresa"], d["numero_guia"], d.get("numero_contenedor")),
             )
+
+    # --- Historial ---
+    def registrar_evento(self, exportacion_id: int, tipo: str, descripcion: str, usuario_id, estado=None) -> int:
+        return self.db.insertar(
+            "INSERT INTO evento_exportacion (exportacion_id, tipo, estado, descripcion, usuario_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (exportacion_id, tipo, estado, descripcion[:300], usuario_id),
+        )
+
+    def eventos(self, exportacion_id: int):
+        return self.db.todos(
+            "SELECT ev.id, ev.tipo, ev.estado, ev.descripcion, ev.fecha, u.nombre AS usuario, u.rol"
+            " FROM evento_exportacion ev LEFT JOIN usuario u ON u.id = ev.usuario_id"
+            " WHERE ev.exportacion_id = ? ORDER BY ev.fecha, ev.id",
+            (exportacion_id,),
+        )

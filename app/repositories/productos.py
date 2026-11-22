@@ -104,3 +104,11 @@ class InventarioRepositorio(Repositorio):
             f"{condicion} ORDER BY m.fecha DESC, m.id DESC LIMIT ?",
             params,
         )
+
+    def movimientos_desde(self, desde: str):
+        """Movimientos de todos los productos desde una fecha (AAAA-MM-DD), para proyecciones."""
+        return self.db.todos(
+            "SELECT producto_id, tipo, cantidad, fecha FROM movimiento_inventario WHERE fecha >= ?"
+            " ORDER BY fecha, id",
+            (desde,),
+        )

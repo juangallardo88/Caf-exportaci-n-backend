@@ -89,3 +89,35 @@ def test_auditor_consulta_inventario_pero_no_lo_modifica(client, auditor, base):
         "producto_id": base["cafe"]["id"], "tipo": "ENTRADA", "cantidad": 5, "motivo": "Intento del auditor",
     }, headers=auditor)
     assert r.status_code == 403
+
+
+# --- Proyección de agotamiento -----------------------------------------------------
+
+def test_proyeccion_estima_dias_para_el_minimo(client, admin, base):
+    # Café: 100 de stock, mínimo 20. Una salida de 45 hoy → 0,5 sacos/día en 90 días
+    client.post("/api/inventario/movimientos", json={
+        "producto_id": base["cafe"]["id"], "tipo": "SALIDA", "cantidad": 45, "motivo": "Venta nacional"},
+        headers=admin)
+    proyeccion = {p["sku"]: p for p in client.get("/api/inventario/proyeccion", headers=admin).json}
+    cafe = proyeccion["CAF-SUP-70"]
+    assert cafe["stock"] == 55 and cafe["consumo_diario"] == 0.5 and cafe["salidas_ventana"] == 45
+    assert cafe["dias_para_minimo"] == 70 and cafe["dias_para_agotarse"] == 110
+    assert cafe["nivel"] == "BAJA" and len(cafe["serie"]) == 91
+    # Hace 90 días el producto no existía; hoy entró con 100 y salieron 45
+    assert cafe["serie"][0]["stock"] == 0 and cafe["serie"][-1]["stock"] == 55
+    # El cacao no tuvo salidas: no se puede proyectar
+    assert proyeccion["CAC-FIN-60"]["nivel"] == "SIN_CONSUMO"
+
+
+def test_proyeccion_ordena_de_lo_mas_urgente(client, admin, base):
+    client.post("/api/inventario/movimientos", json={
+        "producto_id": base["cacao"]["id"], "tipo": "SALIDA", "cantidad": 20, "motivo": "Muestras"}, headers=admin)
+    client.post("/api/inventario/movimientos", json={
+        "producto_id": base["cafe"]["id"], "tipo": "SALIDA", "cantidad": 10, "motivo": "Muestras"}, headers=admin)
+    niveles = [(p["sku"], p["nivel"]) for p in client.get("/api/inventario/proyeccion", headers=admin).json]
+    assert niveles == [("CAC-FIN-60", "ALTA"), ("CAF-SUP-70", "BAJA")]
+
+
+def test_proyeccion_ventana_configurable_y_limitada(client, auditor, base):
+    assert len(client.get("/api/inventario/proyeccion?dias=30", headers=auditor).json[0]["serie"]) == 31
+    assert client.get("/api/inventario/proyeccion?dias=5000", headers=auditor).json[0]["dias_ventana"] == 365

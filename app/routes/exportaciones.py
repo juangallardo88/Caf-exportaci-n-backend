@@ -28,6 +28,12 @@ def detalle(exportacion_id):
     return jsonify(srv.detalle(exportacion_id))
 
 
+@bp.get("/exportaciones/<int:exportacion_id>/historial")
+@requiere_sesion
+def historial(exportacion_id):
+    return jsonify(srv.historial(exportacion_id))
+
+
 @bp.put("/exportaciones/<int:exportacion_id>/costos")
 @requiere_roles(*ESCRITURA)
 def costos(exportacion_id):

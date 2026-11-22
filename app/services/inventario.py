@@ -1,9 +1,11 @@
 """Productos (HU-04 a HU-08) e inventario (HU-24 a HU-26)."""
 from __future__ import annotations
 
+import datetime as dt
+
 from flask import g
 
-from ..domain.reglas import estado_stock, nuevo_stock
+from ..domain.reglas import estado_stock, nuevo_stock, proyectar_agotamiento
 from ..errors import Conflicto, NoEncontrado, ReglaNegocio
 from ..repositories.productos import InventarioRepositorio, ProductoRepositorio
 
@@ -97,3 +99,26 @@ def registrar_movimiento(datos) -> dict:
 
 def listar_movimientos(producto_id=None, limite=100):
     return InventarioRepositorio().movimientos(producto_id, limite)
+
+
+_ORDEN_NIVEL = {"AGOTADO": 0, "ALTA": 1, "MEDIA": 2, "BAJA": 3, "SIN_CONSUMO": 4}
+
+
+def proyeccion(dias: int = 90, hoy: dt.date | None = None) -> list[dict]:
+    """Proyección de agotamiento por producto, de lo más urgente a lo menos urgente."""
+    hoy = hoy or dt.date.today()
+    repo = InventarioRepositorio()
+    desde = (hoy - dt.timedelta(days=dias)).isoformat()
+    por_producto: dict[int, list] = {}
+    for m in repo.movimientos_desde(desde):
+        fecha = dt.date.fromisoformat(str(m["fecha"])[:10])
+        por_producto.setdefault(m["producto_id"], []).append((fecha, m["tipo"], m["cantidad"]))
+    resultado = []
+    for fila in repo.listar():
+        p = proyectar_agotamiento(fila["cantidad"], fila["stock_minimo"], por_producto.get(fila["producto_id"], []),
+                                  hoy, dias)
+        resultado.append({"producto_id": fila["producto_id"], "sku": fila["sku"], "nombre": fila["nombre"],
+                          "stock": fila["cantidad"], "stock_minimo": fila["stock_minimo"], **p})
+    resultado.sort(key=lambda r: (_ORDEN_NIVEL[r["nivel"]], r["dias_para_minimo"] if r["dias_para_minimo"] is not None
+                                  else 10**9, r["nombre"]))
+    return resultado

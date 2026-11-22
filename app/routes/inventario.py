@@ -63,6 +63,13 @@ def bajo_stock():
     return jsonify(srv.listar_inventario(solo_bajo_stock=True))
 
 
+@bp.get("/inventario/proyeccion")
+@requiere_sesion
+def proyeccion():
+    dias = min(max(arg_entero("dias") or 90, 30), 365)
+    return jsonify(srv.proyeccion(dias))
+
+
 @bp.get("/inventario/movimientos")
 @requiere_sesion
 def movimientos():

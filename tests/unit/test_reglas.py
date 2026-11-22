@@ -8,6 +8,7 @@ from app.domain.reglas import (
     estado_stock,
     fechas_validas,
     nuevo_stock,
+    proyectar_agotamiento,
     siguiente_consecutivo,
     transicion_valida,
 )
@@ -91,3 +92,48 @@ class TestEstadoStock:  # HU-08 y HU-26
     ])
     def test_clasificacion(self, cantidad, minimo, esperado):
         assert estado_stock(cantidad, minimo) == esperado
+
+
+class TestProyeccionAgotamiento:
+    HOY = dt.date(2026, 11, 22)
+
+    def test_ritmo_promedio_de_la_ventana(self):
+        # 90 sacos en 90 días = 1 saco/día; con 100 de stock y mínimo 40 llega al mínimo en 60 días
+        r = proyectar_agotamiento(100, 40, [(dt.date(2026, 10, 1), "SALIDA", 90)], self.HOY, dias=90)
+        assert r["consumo_diario"] == 1 and r["consumo_semanal"] == 7
+        assert r["dias_para_minimo"] == 60 and r["dias_para_agotarse"] == 100
+        assert r["fecha_minimo"] == "2027-01-21" and r["fecha_agotamiento"] == "2027-03-02"
+        assert r["nivel"] == "BAJA"
+
+    def test_ignora_salidas_fuera_de_la_ventana(self):
+        r = proyectar_agotamiento(100, 40, [(dt.date(2026, 1, 10), "SALIDA", 500)], self.HOY, dias=90)
+        assert r["nivel"] == "SIN_CONSUMO" and r["dias_para_agotarse"] is None
+
+    def test_las_entradas_no_cuentan_como_consumo(self):
+        r = proyectar_agotamiento(100, 40, [(dt.date(2026, 11, 1), "ENTRADA", 300)], self.HOY)
+        assert r["consumo_diario"] == 0 and r["nivel"] == "SIN_CONSUMO"
+
+    @pytest.mark.parametrize("stock,nivel", [(50, "ALTA"), (80, "MEDIA"), (200, "BAJA")])
+    def test_nivel_de_urgencia_segun_dias_para_el_minimo(self, stock, nivel):
+        # consumo de 1 saco/día y mínimo 40: 10, 40 y 160 días para el mínimo
+        r = proyectar_agotamiento(stock, 40, [(dt.date(2026, 10, 1), "SALIDA", 90)], self.HOY, dias=90)
+        assert r["nivel"] == nivel
+
+    def test_bajo_el_minimo_es_urgente(self):
+        r = proyectar_agotamiento(30, 40, [(dt.date(2026, 11, 1), "SALIDA", 45)], self.HOY, dias=90)
+        assert r["nivel"] == "ALTA" and r["dias_para_minimo"] == 0 and r["dias_para_agotarse"] == 60
+
+    def test_sin_stock_esta_agotado(self):
+        r = proyectar_agotamiento(0, 40, [(dt.date(2026, 11, 1), "SALIDA", 45)], self.HOY)
+        assert r["nivel"] == "AGOTADO" and r["dias_para_agotarse"] == 0
+
+    def test_serie_reconstruye_el_stock_hacia_atras(self):
+        movimientos = [(dt.date(2026, 11, 10), "ENTRADA", 50), (dt.date(2026, 11, 15), "SALIDA", 20),
+                       (dt.date(2026, 11, 20), "AJUSTE", -5)]
+        r = proyectar_agotamiento(125, 10, movimientos, self.HOY, dias=30)
+        stock_por_dia = {p["fecha"]: p["stock"] for p in r["serie"]}
+        assert len(r["serie"]) == 31 and r["serie"][-1] == {"fecha": "2026-11-22", "stock": 125}
+        assert stock_por_dia["2026-11-09"] == 100   # antes de la entrada
+        assert stock_por_dia["2026-11-10"] == 150
+        assert stock_por_dia["2026-11-15"] == 130
+        assert stock_por_dia["2026-11-20"] == 125

@@ -2,6 +2,7 @@
 -- La fuente oficial del modelo es el repositorio de base de datos.
 
 DROP TABLE IF EXISTS token_revocado;
+DROP TABLE IF EXISTS evento_exportacion;
 DROP TABLE IF EXISTS movimiento_inventario;
 DROP TABLE IF EXISTS transporte;
 DROP TABLE IF EXISTS detalle_exportacion;
@@ -117,6 +118,18 @@ CREATE TABLE transporte (
     empresa            VARCHAR(120) NOT NULL,
     numero_guia        VARCHAR(60)  NOT NULL,
     numero_contenedor  VARCHAR(60)
+);
+
+CREATE TABLE evento_exportacion (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    exportacion_id  INTEGER      NOT NULL REFERENCES exportacion (id) ON DELETE CASCADE,
+    tipo            VARCHAR(20)  NOT NULL
+                    CHECK (tipo IN ('CREADA', 'PRODUCTOS', 'COSTOS', 'FECHAS', 'TRANSPORTE', 'ESTADO')),
+    estado          VARCHAR(20)
+                    CHECK (estado IS NULL OR estado IN ('BORRADOR', 'CONFIRMADA', 'EN_TRANSITO', 'ENTREGADA', 'CANCELADA')),
+    descripcion     VARCHAR(300) NOT NULL,
+    usuario_id      INTEGER      REFERENCES usuario (id),
+    fecha           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE movimiento_inventario (
